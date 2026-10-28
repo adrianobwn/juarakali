@@ -1,5 +1,9 @@
 # More than a Hack 2027 — Phase 1: Ball Possession
 
+> **Team Juara Kali's submission.** This fork adds [`solution/`](solution/): the method, results
+> and exact reproduction steps are in [`solution/juara_kali.md`](solution/juara_kali.md).
+> `python solution/model.py submit` regenerates `evaluation/results/juara_kali.csv`.
+
 **Organised by [Metrica Sports](https://metrica-sports.com), [FC Barcelona](https://www.fcbarcelona.com)
 and the [Mobile World Capital Barcelona](https://www.mwcbarcelona.com)**, at the Talent Arena in Barcelona.
 

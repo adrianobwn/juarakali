@@ -1,0 +1,9 @@
+{
+ "d_bias": 0.25,
+ "out_m": 1.0,
+ "out_bonus": 3.0,
+ "c_team": 8.0,
+ "c_dead": 6,
+ "c_live": 30,
+ "w_pres": 2.0
+}
