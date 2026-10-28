@@ -4,7 +4,13 @@ Everything is expressed per team in that team's own attacking frame (x' grows to
 attacks), so the two team blocks are interchangeable: swapping them and swapping H/A is an exact
 augmentation, and nothing can learn "home has the ball more".
 """
+import warnings
+
 import numpy as np
+
+# Frames with nobody tracked (half-time, camera cuts) give all-NaN slices: NaN is the answer.
+warnings.filterwarnings("ignore", r"(All-NaN slice|Mean of empty slice|Degrees of freedom)",
+                        RuntimeWarning)
 
 FPS = 25
 TOUCH_M = 1.5  # the ATD ball sits ~1 m off the carrier's feet
