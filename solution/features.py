@@ -124,6 +124,15 @@ def frame_features(pl, ball, team, halves, pitch):
     F["ball_spd2"] = bs2
     F["ball_spd12"] = bs12
     F["ball_edge"] = np.minimum.reduce([bxy[:, 0], L - bxy[:, 0], bxy[:, 1], W - bxy[:, 1]])
+    # A touch bends the ball's path: acceleration, turn and change of pace, on a lightly
+    # smoothed track so the detector's jitter does not read as touches.
+    sv = velocity(roll(bxy, 2), 3)
+    acc = (shift(sv, 3) - shift(sv, -3)) * (FPS / 6.0)
+    before, after = shift(sv, -6), shift(sv, 6)
+    sb, sa = np.hypot(before[:, 0], before[:, 1]), np.hypot(after[:, 0], after[:, 1])
+    F["ball_acc"] = np.hypot(acc[:, 0], acc[:, 1])
+    F["ball_turn"] = 1 - (before * after).sum(1) / (sb * sa + 1e-6)
+    F["ball_dspd"] = sa - sb
 
     for k in (0, 1):
         m = team == k
@@ -149,6 +158,7 @@ def frame_features(pl, ball, team, halves, pitch):
         F["d1_%d" % k] = d1
         F["d2_%d" % k] = d2
         F["n3_%d" % k] = np.where(np.isnan(bxy[:, 0]), np.nan, (dk < 3).sum(1))
+        F["kink%d" % k] = np.where(d1 < 2.5, F["ball_acc"], np.where(np.isnan(d1), np.nan, 0))
         # Does the ball move with team k's nearest player? Small = carried or controlled.
         j = np.argmin(np.where(np.isnan(dist[:, m]), np.inf, dist[:, m]), 1)
         nv = pv[:, m][np.arange(n), j]
@@ -195,7 +205,7 @@ def swap_index(names):
     def other(nm):
         for a, b in (("0", "1"), ("1", "0")):
             for stem in ("cx", "sx", "sy", "xmax", "xmin", "vx", "spd", "half_opp", "bx",
-                         "d1_", "d2_", "n3_", "rel", "bvx", "n"):
+                         "d1_", "d2_", "n3_", "kink", "rel", "bvx", "n"):
                 pre = stem + a
                 if nm.startswith(pre) and (nm[len(pre):].startswith("_")):
                     return stem + b + nm[len(pre):]

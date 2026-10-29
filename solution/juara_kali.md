@@ -3,18 +3,18 @@
 **More than a Hack 2027, Phase 1** · team *Juara Kali* · submission `juara_kali.csv` ·
 code [github.com/adrianobwn/juarakali](https://github.com/adrianobwn/juarakali)
 
-We label each frame with two gradient-boosted classifiers and a three-state Viterbi decoder. One
-classifier decides whether the ball is dead, judged only from how the players move. The other
-decides which team has the ball. Both are trained only on other matches: Metrica Sports' three
-public sample games, with labels derived mechanically from their human event data. Before
-training, we degrade those games until their ball tracking looks like BAR-ATH's automatic
-tracking. The decoder's switching costs are tuned directly on `spellF1` with leave-one-game-out
-validation. Nothing about BAR-ATH was labelled by hand, and the public five minutes were never
-used to train, tune or choose anything.
+We label each frame with three gradient-boosted classifiers and a three-state Viterbi decoder.
+The first classifier decides whether the ball is dead, judged only from how the players move.
+The second decides which team has the ball. The third spots the moments when the ball changes
+hands. All three are trained only on other matches: Metrica Sports' three public sample games,
+with labels derived mechanically from their human event data. Before training, we degrade those
+games until their ball tracking looks like BAR-ATH's automatic tracking. The decoder is tuned
+directly on `spellF1` with leave-one-game-out validation. Nothing about BAR-ATH was labelled by
+hand, and the public five minutes were never used to train, tune or choose anything.
 
 | | spellF1 | macroF1 |
 |---|---|---|
-| leave-one-game-out, 3 other matches × 3 degradations | **0.606** | 0.872 |
+| leave-one-game-out, 3 other matches × 3 degradations | **0.632** | 0.883 |
 | official baseline (`baseline_smooth50`), same data | 0.287 | 0.689 |
 
 ---
@@ -26,9 +26,10 @@ rather than per-frame guesses. We split the problem into frame probabilities and
 turns them into segments:
 
 ```
-ATD ─► 219 features ─┬─► P(dead)          [players only] ─┐
-                     └─► P(home | live)   [all features] ─┼─► Viterbi (H/A/D) ─► CSV
-       ball tracked? ball beyond a line? ─────────────────┘
+ATD ─► 244 features ─┬─► P(dead)          [players only] ─┐
+                     ├─► P(home | live)   [all features] ─┤
+                     └─► P(change | live) [all features] ─┼─► Viterbi (H/A/D) ─► CSV
+       ball tracked in play? ball beyond a line? ─────────┘
 ```
 
 Two rules from the Laws of the Game are applied on top: Law 9 (ball out of play) in the
@@ -50,36 +51,44 @@ learn that "home has the ball more".
   is being carried), the ball's position in each team's frame and its distance outside the
   lines. We also include the last and next *touch* (ball within 1.5 m of a player): which team,
   and how long ago or until.
+* **How the ball moves:** a touch bends the ball's path. On a lightly smoothed track we measure
+  the ball's acceleration, how sharply it turns and how much its pace changes. Each team also
+  gets the acceleration measured while one of its players is within 2.5 m of the ball.
 * Every feature is also averaged over centred windows of ±0.5, ±2, ±5 and ±10 s, and 2-second
   trends are added for speeds, forward velocities, centroids and the distance ratio.
 
 ### 1.2 Dead-ball model: players only
 
-This is a `HistGradientBoostingClassifier` on the 122 ball-free features. The ball is left out
-on purpose. The training games blank the ball whenever it is dead, while the ATD does not
-always, so ball features would teach the model that a visible ball means live play. Player
-motion transfers cleanly between the two sources. Median player speed in the ATD is 1.44 m/s;
-in the samples it is 1.9 m/s when the ball is live and 1.0 m/s when it is dead.
+This is a `HistGradientBoostingClassifier` (600 trees, 63 leaves) on the 122 ball-free
+features. The ball is left out on purpose. The training games blank the ball whenever it is
+dead, while the ATD does not always, so ball features would teach the model that a visible ball
+means live play. Player motion transfers cleanly between the two sources. Median player speed in
+the ATD is 1.44 m/s; in the samples it is 1.9 m/s when the ball is live and 1.0 m/s when it is
+dead.
 
-### 1.3 Team model
+### 1.3 Team model and switch model
 
-This is a second `HistGradientBoostingClassifier`, trained on live frames with all 219
-features. It outputs P(home | live).
+Both are trained on live frames with all 244 features. The **team model** outputs
+P(home | live). The **switch model** outputs the probability that possession passes between the
+teams within 0.25 s of the frame, that is, the moments where a decoder should be willing to
+change its mind.
 
 ### 1.4 Decoder (`solution/model.py`)
 
 The emissions are the log-probabilities of H, A and D. Two pieces of ball evidence are added:
 
-* **Whether the ball is tracked at all.** P(tracked | dead) and P(tracked | live) are estimated
-  separately for each match, without labels, using the dead model's probabilities as
-  responsibilities. On BAR-ATH they come out at 0.29 and 0.85. The log-likelihood ratio enters
-  with weight 2.0.
-* **Ball more than 1 m outside the lines.** This adds +3 per frame toward D (Law 9: a ball that
-  has wholly crossed a line is out of play). The value is fixed, not tuned, because the sample
-  games blank the ball as soon as it leaves the pitch and therefore cannot measure it.
+* **Whether the ball is tracked in play.** P(tracked | dead) and P(tracked | live) are
+  estimated separately for each match, without labels, using the dead model's probabilities as
+  responsibilities. On BAR-ATH they come out at 0.25 and 0.86. The log-likelihood ratio enters
+  with weight 3. A ball tracked beyond a line does not count as a ball in play.
+* **Ball beyond a line.** A ball tracked more than 0.5 m outside the lines for at least 5 frames
+  adds +8 per frame toward D (Law 9: a ball that has wholly crossed a line is out of play).
 
-The transition costs are 8 for H↔A, 6 into D and 30 out of D, with a +0.25 bias on D.
-Viterbi runs on each half separately.
+Transitions between H and A cost `max(0 − 4·logit P(change), 0.5)` at each frame. A change of
+possession is therefore nearly free where the switch model sees one, and expensive (about 12
+nats when P(change) = 0.05) where it sees none. Going into D costs 200, coming out costs 30, and
+D gets a +0.25 bias. Viterbi runs on each half separately. Every number in this section was
+tuned on the sample games only (§5).
 
 **Opening kickoff (Law 8).** At the kickoff every player is in their own half. We detect the
 first ≥ 3 s stretch with at most one player per team over the halfway line, followed by mixed
@@ -108,7 +117,8 @@ live play, and reproduced it in the samples:
 | property | BAR-ATH ATD | samples as published | samples after degradation |
 |---|---|---|---|
 | ball missing during live play | ~10% of fast-play frames, gaps of median 6–9 s | ~3–10% | +12% of live frames, gaps of median 7 s |
-| dead ball still tracked | 29% (estimated) | 1–15% | ball shown at the restart spot in 40% of stoppages → 28% |
+| dead ball still tracked | 25–29% (estimated) | 1–15% | ball shown at the restart spot in 40% of stoppages → 28% |
+| ball tracked beyond a line after going out | 58 episodes, median 0.9 s, up to 6 m out | blanked at the line | carried on along its last velocity for a median 0.9 s |
 | slow ball: distance to nearest player | median 1.06 m, p75 1.91 m | 0.07 m: the corrected ball sits on the carrier's feet | median 1.09 m, p75 1.64 m |
 
 The ball error is modelled as AR(1) jitter (σ 0.85 m, about 0.5 s of memory) plus episodes of
@@ -144,10 +154,11 @@ so the two are of similar difficulty.
 
 **Decoder:**
 
-* Loose and contested balls stay with the last team. Possession flips only when the other team's
-  evidence persists, so a single touch, deflection or won header does not flip it. A two-way
-  excursion costs 2 × 8 nats.
-* Law 9: a ball tracked more than 1 m beyond a line is dead.
+* Loose and contested balls stay with the last team. Possession flips only where the switch
+  model sees a change, or where the other team's evidence persists, so a single touch,
+  deflection or won header rarely flips it.
+* Law 9: a ball tracked more than 0.5 m beyond a line for 0.2 s pushes the decoder to D, and is
+  never taken as a sign of live play.
 * Law 8: nothing is in play before the opening kickoff.
 * At a restart, the team model decides which team resumes play.
 
@@ -155,32 +166,51 @@ so the two are of similar difficulty.
 
 The scorer is the repository's own `possession_metrics.py`. We ran leave-one-game-out over the
 3 sample games with 3 degradations each, giving 9 evaluations. Decoder parameters were chosen by
-coordinate search on the mean `spellF1` of those 9.
+block coordinate search on the mean `spellF1` of those 9. Parameters that trade off against each
+other (the two switching weights, the two dead-ball costs, the three out-of-play settings) are
+searched jointly.
 
 | held-out game | spellF1 | macroF1 | possessions (pred / true) | baseline spellF1, same data |
 |---|---|---|---|---|
-| Sample 1 | 0.620 | 0.889 | 257 / 379 | 0.313 |
-| Sample 2 | 0.616 | 0.857 | 250 / 354 | 0.285 |
-| Sample 3 | 0.581 | 0.870 | 293 / 404 | 0.263 |
-| **mean** | **0.606** | **0.872** | | **0.287** |
+| Sample 1 | 0.639 | 0.896 | 247 / 379 | 0.313 |
+| Sample 2 | 0.639 | 0.865 | 245 / 354 | 0.285 |
+| Sample 3 | 0.619 | 0.887 | 272 / 404 | 0.263 |
+| **mean** | **0.632** | **0.883** | | **0.287** |
+
+**What each step was worth** (mean `spellF1` over the 9 evaluations, each step re-tuned):
+
+| step | spellF1 |
+|---|---|
+| two classifiers + Viterbi | 0.606 |
+| + ball-out fix (§1.4, §2.1) and ball-movement features | 0.611 |
+| + switch model with per-frame switching costs | 0.625 |
+| + larger trees, block-wise decoder search | **0.632** |
+
+We also tried three additions and dropped them because none moved the mean by more than noise:
+stop and restart detectors in the style of the switch model (+0.001), one-sided before/after
+windows (+0.002) and stoppage-shape features such as a stationary player on the touchline
+(−0.006).
 
 **Where the error is.** Replacing one model's output with the truth shows where the remaining
-error lies. With a perfect team call, `spellF1` reaches about 0.87; with a perfect dead-ball
-call, about 0.68.
+error lies. With a perfect team call, `spellF1` reaches 0.886; with a perfect dead-ball call,
+0.688. Possessions of 8 s or more are recovered 81–86% of the time. Possessions under 2 s are
+mostly missed (§6).
 
 **Public five minutes.** We used the public window as a pipeline check only: frames aligned,
-H/A not swapped, labels meaning what we think. We ran it on the final file and never used it to
-choose between versions. The result is spellF1 0.581, macroF1 0.878, 14 possessions predicted
-against 17 true. With 17 possessions this window cannot rank anything, as `EVALUATION.md`
-explains.
+H/A not swapped, labels meaning what we think. It also exposed a bug: a ball tracked 6 m behind
+the goal line was still being labelled as live play, because a visible ball counted as evidence
+of play. We fixed the logic (§1.4) and set its numbers on the sample games only. The final file
+scores spellF1 0.621 and macroF1 0.832 on the window, with 12 possessions predicted against 17
+true. With 17 possessions this window cannot rank anything, as `EVALUATION.md` explains.
 
-**On BAR-ATH** the file has 271 possessions of mean 12.2 s, a dead share of 48% of graded frames
-and 61.6% live possession for Barcelona.
+**On BAR-ATH** the file has 251 possessions of mean 13.4 s, a dead share of 47% of graded frames
+(56 minutes of ball in play) and 61.6% live possession for Barcelona.
 
 ## 6. Limitations
 
 * **Short possessions:** spells under about 2 s (duels, one-touch interceptions) are mostly
-  missed, and we predict fewer possessions than there are.
+  missed, and we predict fewer possessions than there are. On those frames the team model is
+  close to 50/50: with the ATD ball about 1 m off the feet, a single touch rarely shows.
 * **Quick restarts:** stoppages under 5 s are mostly not detected.
 * **Training data:** only 3 matches from another competition, using corrected tracking that we
   degrade synthetically. The ATD's real failure modes are only approximated: a wrong object
@@ -203,11 +233,11 @@ pip install -r requirements.txt -r solution/requirements.txt
 git clone https://github.com/metrica-sports/sample-data data/metrica-sample-data
 git -C data/metrica-sample-data checkout e706dd5
 
-python solution/model.py submit    # ~2 min -> evaluation/results/juara_kali.csv
+python solution/model.py submit    # ~3 min -> evaluation/results/juara_kali.csv
 python evaluation/validate_submission.py evaluation/results/juara_kali.csv
 ```
 
-Our file's md5 is `6b08e46de25854eabc51149046bb16d7`. We verified that rebuilding from empty
+Our file's md5 is `b47d10f656bbc0d487515826791d6b7f`. We verified that rebuilding from empty
 caches gives the identical file. `python solution/model.py dev` re-runs the leave-one-game-out
-validation and rewrites `solution/params.json` (about half an hour). `retune` repeats only the
-decoder search, using the cached probabilities.
+validation and rewrites `solution/params.json` (about 20 min). `retune` repeats only the decoder
+search, using the cached probabilities.
