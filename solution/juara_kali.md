@@ -7,10 +7,11 @@ We label each frame with three gradient-boosted classifiers and a three-state Vi
 The first classifier decides whether the ball is dead, judged only from how the players move.
 The second decides which team has the ball. The third spots the moments when the ball changes
 hands. All three are trained only on other matches: Metrica Sports' three public sample games,
-with labels derived mechanically from their human event data. Before training, we degrade those
-games until their ball tracking looks like BAR-ATH's automatic tracking. The decoder is tuned
-directly on `spellF1` with leave-one-game-out validation. Nothing about BAR-ATH was labelled by
-hand, and the public five minutes were never used to train, tune or choose anything.
+with labels derived mechanically from their human event data. Before training, we degrade the
+games' clean ball tracking with simulated automatic trackers drawn at random from wide ranges.
+The decoder is tuned directly on `spellF1` with leave-one-game-out validation. BAR-ATH is only
+the input: no label, tuned value or constant comes from it, and the public five minutes were never
+used to train, tune or choose anything (§8).
 
 | | spellF1 | macroF1 |
 |---|---|---|
@@ -33,7 +34,7 @@ ATD ─► 244 features ─┬─► P(dead)          [players only] ─┐
 ```
 
 Two rules from the Laws of the Game are applied on top: Law 9 (ball out of play) in the
-decoder, and Law 8 (opening kickoff) after it.
+decoder, and Law 8 (nothing is in play before the kickoff) after it.
 
 ### 1.1 Features (`solution/features.py`)
 
@@ -61,10 +62,9 @@ learn that "home has the ball more".
 
 This is a `HistGradientBoostingClassifier` (600 trees, 63 leaves) on the 122 ball-free
 features. The ball is left out on purpose. The training games blank the ball whenever it is
-dead, while the ATD does not always, so ball features would teach the model that a visible ball
-means live play. Player motion transfers cleanly between the two sources. Median player speed in
-the ATD is 1.44 m/s; in the samples it is 1.9 m/s when the ball is live and 1.0 m/s when it is
-dead.
+dead, while an automatic tracker need not, so ball features would teach the model that a
+visible ball means live play. Player motion transfers cleanly between sources: in the samples,
+median player speed is 1.9 m/s when the ball is live and 1.0 m/s when it is dead.
 
 ### 1.3 Team model and switch model
 
@@ -78,9 +78,9 @@ change its mind.
 The emissions are the log-probabilities of H, A and D. Two pieces of ball evidence are added:
 
 * **Whether the ball is tracked in play.** P(tracked | dead) and P(tracked | live) are
-  estimated separately for each match, without labels, using the dead model's probabilities as
-  responsibilities. On BAR-ATH they come out at 0.25 and 0.86. The log-likelihood ratio enters
-  with weight 3. A ball tracked beyond a line does not count as a ball in play.
+  estimated separately for each match while it is being labelled, without labels, using the
+  dead model's probabilities as responsibilities. The log-likelihood ratio enters with weight 3.
+  A ball tracked beyond a line does not count as a ball in play.
 * **Ball beyond a line.** A ball tracked more than 0.5 m outside the lines for at least 5 frames
   adds +8 per frame toward D (Law 9: a ball that has wholly crossed a line is out of play).
 
@@ -90,12 +90,10 @@ nats when P(change) = 0.05) where it sees none. Going into D costs 200, coming o
 D gets a +0.25 bias. Viterbi runs on each half separately. Every number in this section was
 tuned on the sample games only (§5).
 
-**Opening kickoff (Law 8).** At the kickoff every player is in their own half. We detect the
-first ≥ 3 s stretch with at most one player per team over the halfway line, followed by mixed
-play. Everything before it is set to D if the dead model agrees (mean P(dead) > 0.5), so the
-rule can never remove real play. On BAR-ATH this fires only for the second half: the graded
-block starts about two minutes before the kickoff, and the detector places the kickoff at
-frame 113754.
+**Kickoff (Law 8).** The ball is not in play before a half's kickoff. The organisers publish both
+kickoff frames (`starter/load_smart_tagging.py`, `FAQ.md`), and `FAQ.md` notes that the second
+half is graded from frame 110,808 but kicks off at 113,742. Every frame of a half before its
+published kickoff is set to D.
 
 ## 2. Training data
 
@@ -106,38 +104,39 @@ All training data comes from **other games**. We made no labels ourselves.
 | [metrica-sports/sample-data](https://github.com/metrica-sports/sample-data) @ `e706dd5` | 3 anonymised professional matches: corrected tracking at 25 fps plus event data | Metrica Sports' human event annotation, published openly | 426,577 frames (4.7 h) |
 
 Frame labels are derived mechanically from those events using the rules in §4. Three degraded
-copies of each game are used (§2.1). Nothing about BAR-ATH was labelled, by us or by anyone,
-and no human-produced data about BAR-ATH was used.
+copies of each game are used (§2.1). Nothing about BAR-ATH was labelled by us, and the only
+information about it we use beyond its tracking is what the organisers publish to every team:
+the half boundaries and the two kickoff frames.
 
-### 2.1 Making the sample games look like the ATD
+### 2.1 Simulated automatic trackers
 
-We measured each property on the BAR-ATH ATD without labels, using player speed as a proxy for
-live play, and reproduced it in the samples:
+The sample games come with corrected tracking: the ball sits on the carrier's feet (0.07 m median
+when slow), is never lost in live play for long and is blanked whenever play stops. An automatic
+tracker behaves differently, and a model trained on clean tracking would learn distance
+thresholds of about 0.1 m that never fire on automatic data. We do not measure the provided
+match's tracking. Each degraded copy instead gets its own simulated tracker, with every property
+drawn from a wide range that runs from a nearly perfect tracker to a poor one:
 
-| property | BAR-ATH ATD | samples as published | samples after degradation |
-|---|---|---|---|
-| ball missing during live play | ~10% of fast-play frames, gaps of median 6–9 s | ~3–10% | +12% of live frames, gaps of median 7 s |
-| dead ball still tracked | 25–29% (estimated) | 1–15% | ball shown at the restart spot in 40% of stoppages → 28% |
-| ball tracked beyond a line after going out | 58 episodes, median 0.9 s, up to 6 m out | blanked at the line | carried on along its last velocity for a median 0.9 s |
-| slow ball: distance to nearest player | median 1.06 m, p75 1.91 m | 0.07 m: the corrected ball sits on the carrier's feet | median 1.09 m, p75 1.64 m |
+| property of the simulated tracker | drawn from |
+|---|---|
+| live-play frames with no ball | 0–30%, in gaps of median 1–15 s (log-uniform), lognormal spread 1 |
+| ball tracked on past the line after going out | median 0.2–3 s (log-uniform), along its last velocity |
+| stoppages where the dead ball is seen at its restart spot | 0–100% |
+| ball position error | AR(1) jitter σ 0.1–1.5 m with 0.2–1 s memory, plus spells of σ 1.5–5 m error on 0–30% of frames |
 
-The ball error is modelled as AR(1) jitter (σ 0.85 m, about 0.5 s of memory) plus episodes of
-larger error (σ 3.5 m, 15% of frames). The last row matters most. Without it, the team model
-learns distance thresholds of about 0.1 m that never fire on the ATD. As a check on the
-degradation, the official baseline scores 0.287 on the degraded samples and 0.2433 on BAR-ATH,
-so the two are of similar difficulty.
+The ranges were set before any training and never tuned (tuning them on the same simulation would
+be circular). As a check on difficulty, the official baseline scores spellF1 0.293 and macroF1
+0.674 on our degraded samples, and 0.2433 and 0.6724 on BAR-ATH according to `EVALUATION.md`.
 
 ## 3. Assets used and dropped
 
-* **Used:** the tactical ATD and its metadata (which slot belongs to which team), and the
-  published half boundaries in `games.py`.
-* **Dropped: Smart Tagging.** Its team tag agrees with the team nearest the ball only 58–87% of
-  the time, depending on the code. No other game has Smart Tagging, so its weight could not be
-  calibrated without touching BAR-ATH labels.
+* **Used:** the tactical ATD and its metadata (which slot belongs to which team), the published
+  half boundaries in `games.py`, and the published kickoff frames.
+* **Dropped: Smart Tagging.** No other game has Smart Tagging, so how much to trust it could not
+  be set on external data.
 * **Dropped: broadcast ATD and homography.** They are not synchronised with the tactical feed.
-  During live play the tactical ATD already has the ball about 90% of the time, so aligning the
-  broadcast was not worth it.
-* **Dropped: video and tactical homography.** The ATD is already in pitch coordinates.
+* **Dropped: video and tactical homography.** The ATD is already in pitch coordinates. The video
+  was never used, neither as input nor to check our output.
 
 ## 4. Possession rules implemented
 
@@ -159,7 +158,7 @@ so the two are of similar difficulty.
   deflection or won header rarely flips it.
 * Law 9: a ball tracked more than 0.5 m beyond a line for 0.2 s pushes the decoder to D, and is
   never taken as a sign of live play.
-* Law 8: nothing is in play before the opening kickoff.
+* Law 8: nothing is in play before a half's published kickoff.
 * At a restart, the team model decides which team resumes play.
 
 ## 5. Validation
@@ -196,29 +195,23 @@ error lies. With a perfect team call, `spellF1` reaches 0.886; with a perfect de
 0.688. Possessions of 8 s or more are recovered 81–86% of the time. Possessions under 2 s are
 mostly missed (§6).
 
-**Public five minutes.** We used the public window as a pipeline check only: frames aligned,
-H/A not swapped, labels meaning what we think. It also exposed a bug: a ball tracked 6 m behind
-the goal line was still being labelled as live play, because a visible ball counted as evidence
-of play. We fixed the logic (§1.4) and set its numbers on the sample games only. The final file
-scores spellF1 0.621 and macroF1 0.832 on the window, with 12 possessions predicted against 17
-true. With 17 possessions this window cannot rank anything, as `EVALUATION.md` explains.
-
-**On BAR-ATH** the file has 251 possessions of mean 13.4 s, a dead share of 47% of graded frames
-(56 minutes of ball in play) and 61.6% live possession for Barcelona.
+**Public five minutes.** We ran the public window through the official scorer as a pipeline
+check only (frames aligned, H/A not swapped) and never used it to train, tune or choose. What we
+learned from looking at it is listed in §8.
 
 ## 6. Limitations
 
 * **Short possessions:** spells under about 2 s (duels, one-touch interceptions) are mostly
   missed, and we predict fewer possessions than there are. On those frames the team model is
-  close to 50/50: with the ATD ball about 1 m off the feet, a single touch rarely shows.
+  close to 50/50: with an automatic tracker's ball often a metre off the feet, a single touch
+  rarely shows.
 * **Quick restarts:** stoppages under 5 s are mostly not detected.
 * **Training data:** only 3 matches from another competition, using corrected tracking that we
-  degrade synthetically. The ATD's real failure modes are only approximated: a wrong object
+  degrade synthetically. A real tracker's failure modes are only approximated: a wrong object
   tracked as the ball, a track swapping teams, spare balls near the touchline (which could
   trigger the out-of-play rule).
-* **With more time we would** train a sequence model (BiGRU) on the same features,
-  synchronise the broadcast ATD to fill ball gaps, and self-train on BAR-ATH with algorithmic
-  pseudo-labels.
+* **With more time we would** train a sequence model (BiGRU) on the same features and add more
+  external matches with automatic tracking.
 
 ## 7. Reproduction
 
@@ -241,3 +234,28 @@ Our file's md5 is `b47d10f656bbc0d487515826791d6b7f`. We verified that rebuildin
 caches gives the identical file. `python solution/model.py dev` re-runs the leave-one-game-out
 validation and rewrites `solution/params.json` (about 20 min). `retune` repeats only the decoder
 search, using the cached probabilities.
+
+## 8. What the provided match is used for
+
+* **Input only.** `submit` reads the tactical ATD and its metadata, plus the half boundaries and
+  kickoff frames that the organisers publish. Every model, threshold and decoder setting was
+  trained or tuned on the three sample games. No value was set by measuring BAR-ATH.
+* **Public five minutes.** Run only through the official scorer, as a pipeline check. Looking at
+  it taught us two things about what counts as possession, which the rules allow. First,
+  possessions shorter than a second count: our label rule already counted them, and we kept it.
+  Second, a ball tracked behind a goal line is dead. That exposed a bug, because such a ball still
+  counted as evidence of live play. We fixed the logic (§1.4) and set its numbers on the sample
+  games only.
+* **Video.** Never used: not as input, not to check output, not to tune.
+* **Change after the rules clarification (November 2026).** Up to commit `008b2b7`:
+  * the tracker simulation was calibrated to statistics we had measured on the BAR-ATH ATD
+    without labels: how often and how long the ball is lost, its offset from the carrier, how
+    long it is tracked past a line, and how often a dead ball is seen;
+  * the touch radius came from the same measurement;
+  * the thresholds of a formation-based kickoff detector were adjusted on BAR-ATH's tracking.
+
+  The clarification requires every tuned value to come from external data, so we removed all of
+  it. The simulation now draws random trackers from fixed, wide ranges (§2.1), the touch radius was
+  re-chosen on the sample games (§1.1), and Law 8 uses the published kickoff frames (§1.4).
+* **Tools.** The code was written with the help of an AI coding assistant (Claude Code). The
+  pipeline itself calls no LLM and no online service.

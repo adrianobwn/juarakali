@@ -4,7 +4,8 @@
     python solution/model.py submit   # train on all sample games, label BAR-ATH, write the CSV
 
 Trained and tuned only on other games (Metrica's public samples, labels derived from their human
-event data). The provided match contributes no labels of any kind.
+event data). No label, tuned value or constant here comes from the provided match: it is only the
+input the trained pipeline runs on.
 """
 import json
 import os
@@ -17,7 +18,7 @@ from sklearn.ensemble import HistGradientBoostingClassifier
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-sys.path[:0] = [HERE, ROOT, os.path.join(ROOT, "evaluation")]
+sys.path[:0] = [HERE, ROOT, os.path.join(ROOT, "evaluation"), os.path.join(ROOT, "starter")]
 import features as ft  # noqa: E402
 import possession_metrics as pm  # noqa: E402
 
@@ -26,34 +27,47 @@ PARAMS = os.path.join(HERE, "params.json")
 BALL_STEMS = ("ball_", "bx", "d1_", "d2_", "n3_", "kink", "rel", "bvx", "dlog", "by_", "last_touch",
               "next_touch", "since_touch", "until_touch", "touch_bal")
 SEED = 0
-SEEDS = (0, 1, 2)  # degraded copies of each sample game: more ways for the ATD to lose the ball
-DEAD_SEEN = 0.4  # share of stoppages where the ATD-like ball is visible at the restart spot
+SEEDS = (0, 1, 2)  # degraded copies of each sample game, each with its own made-up tracker
 
 
 # -- data --------------------------------------------------------------------------------------
 
-def degrade_ball(ball, label, seed, pitch, frac=0.12):
-    """Make the samples' corrected ball look like the automatic tracking's.
+def tracker(rng):
+    """A made-up automatic ball tracker, drawn from wide ranges: from nearly perfect to poor.
 
-    The ATD never flickers: it loses the ball in stretches. While players move fast (live play)
-    it is missing ~10% of the time in gaps of median 6-9 s; most of its long gaps are stoppages,
-    which the sample games already blank. This makes live play in the two look alike.
+    Nothing about the provided match's tracking is measured. Every degraded copy of a sample game
+    gets its own tracker, so the models have to cope with any of them.
+    """
+    return dict(loss=rng.uniform(0, 0.3),                            # live frames with no ball
+                gap_s=np.exp(rng.uniform(np.log(1), np.log(15))),     # median length of a loss
+                carry_s=np.exp(rng.uniform(np.log(0.2), np.log(3))),  # tracked past the line
+                dead_seen=rng.uniform(0, 1),                          # stoppages, ball visible
+                jitter_m=rng.uniform(0.1, 1.5), memory_s=rng.uniform(0.2, 1.0),
+                big=rng.uniform(0, 0.3), big_m=rng.uniform(1.5, 5))   # spells of large error
+
+
+def degrade_ball(ball, label, seed, pitch):
+    """Make the samples' corrected ball look like an automatic tracker's (see tracker()).
+
+    An automatic tracker loses the ball in stretches rather than flickering, follows a ball past
+    the line for a moment where the samples blank it at the line, may still see a dead ball at
+    its restart spot, and puts the ball up to metres off the player playing it.
     """
     rng = np.random.RandomState(seed)
+    t = tracker(rng)
     ball = ball.copy()
     alive = np.isin(label, ["H", "A"])
-    target = frac * alive.sum()
+    target = t["loss"] * alive.sum()
     masked = 0
     while masked < target:
-        n = int(np.clip(rng.lognormal(np.log(7 * 25), 0.7), 25, 60 * 25))
+        n = int(np.clip(rng.lognormal(np.log(t["gap_s"] * 25), 1.0), 25, 60 * 25))
         s = rng.randint(0, len(ball) - n)
         masked += (alive[s:s + n] & ~np.isnan(ball[s:s + n, 0])).sum()
         ball[s:s + n] = np.nan
     dead = (label == "D").astype(np.int8)
     edges = np.diff(np.concatenate(([0], dead, [0])))
     stops = list(zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1)))
-    # A ball leaving the pitch: the ATD keeps tracking it beyond the line for a moment (58
-    # episodes in BAR-ATH, median 0.9 s, up to 6 m out); the samples blank it at the line.
+    # A ball leaving the pitch: carry it on past the line for the tracker's carry time.
     L, W = pitch
     for a, b in stops:
         if a < 6 or np.isnan(ball[a - 1, 0]) or np.isnan(ball[a - 6, 0]):
@@ -65,44 +79,41 @@ def degrade_ball(ball, label, seed, pitch, frac=0.12):
         j = np.argmin(edge)
         if edge[j] > 3 or outward[j] < 0.1:
             continue                                               # a foul, not a ball out
-        k = min(int(np.clip(rng.lognormal(np.log(22), 0.8), 5, 100)), b - a)
+        k = min(int(np.clip(rng.lognormal(np.log(t["carry_s"] * 25), 1.0), 1, 150)), b - a)
         path = p1 + np.cumsum(0.97 ** np.arange(1, k + 1))[:, None] * v
         fill = np.isnan(ball[a:a + k, 0])
         ball[a:a + k][fill] = path[fill]
-    # The ATD often still sees a dead ball -- lying at the restart spot while players set up.
-    # The samples blank it, so show it there for the tail of some stoppages.
+    # A dead ball lying at the restart spot while players set up: the samples blank it, so show
+    # it there for the tail of some stoppages.
     for a, b in stops:
-        if b >= len(ball) or np.isnan(ball[b, 0]) or rng.rand() > DEAD_SEEN:
+        if b >= len(ball) or np.isnan(ball[b, 0]) or rng.rand() > t["dead_seen"]:
             continue
         s = b - int((b - a) * rng.uniform(0.3, 1.0))
         ball[s:b] = ball[b] + rng.normal(0, 0.1, (b - s, 2))
-    return ball + ball_noise(len(ball), rng)
+    return ball + ball_noise(len(ball), rng, t)
 
 
-def ball_noise(n, rng, s1=0.85, s2=3.5, p2=0.15):
-    """ATD-like ball position error, metres: correlated jitter plus episodes of large error.
-
-    The samples' corrected ball sits on the carrier's feet (0.07 m median when slow); the ATD
-    puts it 1.06 m away (p25 0.57, p75 1.91, p90 4.5 m in live play). This reproduces that.
-    """
+def ball_noise(n, rng, t):
+    """Ball position error, metres: correlated jitter plus spells of large error. The samples'
+    corrected ball sits on the carrier's feet; an automatic tracker's does not."""
     from scipy.signal import lfilter
-    rho = np.exp(-1.0 / 12)  # about half a second of memory
+    rho = np.exp(-1.0 / (t["memory_s"] * 25))
 
     def ar1(sigma):
         return lfilter([np.sqrt(1 - rho ** 2)], [1, -rho], rng.normal(0, 1, (n, 2)), axis=0) * sigma
     big = np.zeros(n, dtype=bool)
-    while big.mean() < p2:
+    while big.mean() < t["big"]:
         k = int(np.clip(rng.lognormal(np.log(25), 0.6), 5, 150))
         s = rng.randint(0, n - k)
         big[s:s + k] = True
-    return ar1(s1) + np.where(big[:, None], ar1(s2), 0)
+    return ar1(t["jitter_m"]) + np.where(big[:, None], ar1(t["big_m"]), 0)
 
 
 def sample_set(g, seed):
     import samples
     d = samples.load(g)
     halves = [tuple(np.flatnonzero(d["period"] == p)[[0, -1]] + [0, 1]) for p in (1, 2)]
-    ball = degrade_ball(d["ball"], d["label"], seed, d["pitch"])
+    ball = degrade_ball(d["ball"], d["label"], [seed, GAMES.index(g)], d["pitch"])
     X, names = ft.frame_features(d["pl"], ball, d["team"], halves, d["pitch"])
     return dict(X=X, names=names, label=d["label"])
 
@@ -240,7 +251,7 @@ def presence_rates(pD, present, runs):
     """P(ball tracked | dead), P(ball tracked | live), estimated on this match without labels.
 
     The players-only dead model supplies the responsibilities, so the rates adapt to whatever
-    tracker produced the ball -- the sample games blank it when dead, the ATD only mostly does.
+    tracker produced the ball -- the sample games blank it when dead, another tracker may not.
     """
     m = np.zeros(len(pD), dtype=bool)
     for a, b in runs:
@@ -380,6 +391,7 @@ def dev(post=None, p0=DEFAULT):
 def submit(name="juara_kali"):
     import atd
     from games import GAME, half_video_blocks
+    from load_smart_tagging import KICKOFF_VIDEO_FRAMES
     p = json.load(open(PARAMS))
     models = train(list(load_samples().values()))
     pl, ball, team = atd.load()
@@ -387,22 +399,16 @@ def submit(name="juara_kali"):
     X, names = ft.frame_features(pl, ball, team, halves, tuple(atd.PITCH))
     assert names == models[1]
     P = dict(posteriors(models, X), ball_out=X[:, names.index("ball_out_w0")])
-    print("ball tracked | dead %.2f, | live %.2f (estimated on this match, no labels)"
-          % presence_rates(P["pD"], in_play(P["ball_out"], p["out_m"]), halves))
     labels = decode(P, halves, p)
-    # Before a half's opening kickoff the ball is not in play (Law 8). Only trusted where the
-    # dead model agrees, so a kickoff after an early goal cannot wipe out real play.
-    dirs = ft.attack_dirs(pl[..., :2].astype(np.float64), team, halves, atd.PITCH)
-    for h, (a, b) in enumerate(halves):
-        ko = ft.kickoff_frame(pl, team, (a, b), dirs[h], atd.PITCH)
-        if ko > a and P["pD"][a:ko].mean() > 0.5:
-            labels[a:ko] = "D"
-            print("half %d: dead before kickoff at frame %d" % (h + 1, ko))
+    # FAQ.md: the second half is graded from frame 110,808 but kicks off only at 113,742, and
+    # every frame in between is D (Law 8). Both kickoff frames are published by the organisers.
+    for (a, _), ko in zip(halves, sorted(KICKOFF_VIDEO_FRAMES.values())):
+        labels[a:ko] = "D"
     out = os.path.join(ROOT, "evaluation", "results", name + ".csv")
     with open(out, "w") as fh:
         fh.write("frame,label\n")
         fh.writelines("%d,%s\n" % (i, l) for i, l in enumerate(labels))
-    print("wrote", out, {k: int((labels == k).sum()) for k in "HADX"})
+    print("wrote", out)
 
 
 def retune():

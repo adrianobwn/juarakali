@@ -13,7 +13,7 @@ warnings.filterwarnings("ignore", r"(All-NaN slice|Mean of empty slice|Degrees o
                         RuntimeWarning)
 
 FPS = 25
-TOUCH_M = 1.5  # the ATD ball sits ~1 m off the carrier's feet
+TOUCH_M = 1.5  # touch radius; chosen leave-one-game-out on the sample games from 1.0/1.5/2.0
 SIGNED = ("dlog", "last_touch", "next_touch", "touch_bal")
 
 
@@ -60,30 +60,6 @@ def attack_dirs(pl, team, halves, pitch):
         mins = [np.nanmedian(np.nanmin(pl[a:b, team == k, 0], 1)) for k in (0, 1)]
         out[h] = (1, -1) if mins[0] < mins[1] else (-1, 1)
     return out
-
-
-def kickoff_frame(pl, team, half, direction, pitch, search_s=300, min_s=3, settle_s=10):
-    """Video frame of a half's opening kickoff, or the half's first frame if none is found.
-
-    Law 8: at the kick-off every player is in their own half. The kickoff is the end of the
-    first stretch of at least min_s seconds with at most one player per team (the kicker) over
-    the halfway line, which is followed by settle_s seconds of play with the teams mixed.
-    """
-    a, b = half
-    b = min(b, a + search_s * FPS)
-    L = pitch[0]
-    ok = (~np.isnan(pl[a:b, :, 0])).sum(1) >= 14
-    for k in (0, 1):
-        x = pl[a:b, team == k, 0]
-        xo = x if direction[k] > 0 else L - x
-        with np.errstate(invalid="ignore"):
-            ok &= (xo > L / 2 + 1).sum(1) <= 1
-    ok = roll(ok.astype(float), FPS // 2) > 0.5          # ride over a tracking blip
-    edges = np.diff(np.concatenate(([0], ok.astype(np.int8), [0])))
-    for s, e in zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1)):
-        if e - s >= min_s * FPS and ok[e:e + settle_s * FPS].mean() < 0.2:
-            return a + e
-    return a
 
 
 def frame_features(pl, ball, team, halves, pitch):
