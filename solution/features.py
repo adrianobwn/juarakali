@@ -13,7 +13,7 @@ warnings.filterwarnings("ignore", r"(All-NaN slice|Mean of empty slice|Degrees o
                         RuntimeWarning)
 
 FPS = 25
-TOUCH_M = 1.5  # touch radius; chosen leave-one-game-out on the sample games from 1.0/1.5/2.0
+TOUCH_M = 1.0  # touch radius; chosen leave-one-game-out on the sample games from 1.0/1.5/2.0
 SIGNED = ("dlog", "last_touch", "next_touch", "touch_bal")
 
 

@@ -15,8 +15,8 @@ used to train, tune or choose anything (§8).
 
 | | spellF1 | macroF1 |
 |---|---|---|
-| leave-one-game-out, 3 other matches × 3 degradations | **0.632** | 0.883 |
-| official baseline (`baseline_smooth50`), same data | 0.287 | 0.689 |
+| leave-one-game-out, 3 other matches × 3 simulated trackers | **0.614** | 0.881 |
+| official baseline (`baseline_smooth50`), same data | 0.293 | 0.674 |
 
 ---
 
@@ -50,7 +50,8 @@ learn that "home has the ball more".
 * **Ball, when tracked:** nearest and second-nearest distance per team, players within 3 m,
   ball speed, the ball's velocity relative to each team's nearest player (small when the ball
   is being carried), the ball's position in each team's frame and its distance outside the
-  lines. We also include the last and next *touch* (ball within 1.5 m of a player): which team,
+  lines. We also include the last and next *touch* (ball within 1.0 m of a player; the radius was chosen from 1.0, 1.5
+  and 2.0 m on the sample games, §5): which team,
   and how long ago or until.
 * **How the ball moves:** a touch bends the ball's path. On a lightly smoothed track we measure
   the ball's acceleration, how sharply it turns and how much its pace changes. Each team also
@@ -81,13 +82,13 @@ The emissions are the log-probabilities of H, A and D. Two pieces of ball eviden
   estimated separately for each match while it is being labelled, without labels, using the
   dead model's probabilities as responsibilities. The log-likelihood ratio enters with weight 3.
   A ball tracked beyond a line does not count as a ball in play.
-* **Ball beyond a line.** A ball tracked more than 0.5 m outside the lines for at least 5 frames
+* **Ball beyond a line.** A ball tracked more than 0.5 m outside the lines
   adds +8 per frame toward D (Law 9: a ball that has wholly crossed a line is out of play).
 
-Transitions between H and A cost `max(0 − 4·logit P(change), 0.5)` at each frame. A change of
-possession is therefore nearly free where the switch model sees one, and expensive (about 12
-nats when P(change) = 0.05) where it sees none. Going into D costs 200, coming out costs 30, and
-D gets a +0.25 bias. Viterbi runs on each half separately. Every number in this section was
+Transitions between H and A cost `max(−2 − 4·logit P(change), 0.5)` at each frame. A change of
+possession is therefore nearly free where the switch model sees one, and expensive (about 10
+nats when P(change) = 0.05) where it sees none. Going into D costs 200, coming out costs 10, and
+D gets a +1 bias. Viterbi runs on each half separately. Every number in this section was
 tuned on the sample games only (§5).
 
 **Kickoff (Law 8).** The ball is not in play before a half's kickoff. The organisers publish both
@@ -156,7 +157,7 @@ be circular). As a check on difficulty, the official baseline scores spellF1 0.2
 * Loose and contested balls stay with the last team. Possession flips only where the switch
   model sees a change, or where the other team's evidence persists, so a single touch,
   deflection or won header rarely flips it.
-* Law 9: a ball tracked more than 0.5 m beyond a line for 0.2 s pushes the decoder to D, and is
+* Law 9: a ball tracked more than 0.5 m beyond a line pushes the decoder to D, and is
   never taken as a sign of live play.
 * Law 8: nothing is in play before a half's published kickoff.
 * At a restart, the team model decides which team resumes play.
@@ -171,12 +172,17 @@ searched jointly.
 
 | held-out game | spellF1 | macroF1 | possessions (pred / true) | baseline spellF1, same data |
 |---|---|---|---|---|
-| Sample 1 | 0.639 | 0.896 | 247 / 379 | 0.313 |
-| Sample 2 | 0.639 | 0.865 | 245 / 354 | 0.285 |
-| Sample 3 | 0.619 | 0.887 | 272 / 404 | 0.263 |
-| **mean** | **0.632** | **0.883** | | **0.287** |
+| Sample 1 | 0.640 | 0.908 | 240 / 379 | 0.337 |
+| Sample 2 | 0.620 | 0.858 | 247 / 354 | 0.282 |
+| Sample 3 | 0.582 | 0.877 | 265 / 404 | 0.261 |
+| **mean** | **0.614** | **0.881** | | **0.293** |
 
-**What each step was worth** (mean `spellF1` over the 9 evaluations, each step re-tuned):
+The touch radius was chosen the same way: 1.0 m scores 0.614, 1.5 m 0.611 and 2.0 m 0.608.
+These scores are not comparable with those of our earlier versions, whose test copies were
+degraded with a single tracker calibrated to BAR-ATH (§8).
+
+**What each step was worth** (mean `spellF1` over the 9 evaluations, each step re-tuned; measured
+with the earlier, single simulated tracker, and not re-run since):
 
 | step | spellF1 |
 |---|---|
@@ -190,7 +196,7 @@ stop and restart detectors in the style of the switch model (+0.001), one-sided 
 windows (+0.002) and stoppage-shape features such as a stationary player on the touchline
 (−0.006).
 
-**Where the error is.** Replacing one model's output with the truth shows where the remaining
+**Where the error is** (earlier simulation). Replacing one model's output with the truth shows where the remaining
 error lies. With a perfect team call, `spellF1` reaches 0.886; with a perfect dead-ball call,
 0.688. Possessions of 8 s or more are recovered 81–86% of the time. Possessions under 2 s are
 mostly missed (§6).
@@ -230,7 +236,7 @@ python solution/model.py submit    # ~3 min -> evaluation/results/juara_kali.csv
 python evaluation/validate_submission.py evaluation/results/juara_kali.csv
 ```
 
-Our file's md5 is `b47d10f656bbc0d487515826791d6b7f`. We verified that rebuilding from empty
+Our file's md5 is `4d119bf9810c0794f39ff6815091c834`. We verified that rebuilding from empty
 caches gives the identical file. `python solution/model.py dev` re-runs the leave-one-game-out
 validation and rewrites `solution/params.json` (about 20 min). `retune` repeats only the decoder
 search, using the cached probabilities.

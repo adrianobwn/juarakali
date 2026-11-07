@@ -1,11 +1,11 @@
 {
- "d_bias": 0.25,
+ "d_bias": 1,
  "out_m": 0.5,
- "out_k": 5,
+ "out_k": 1,
  "out_bonus": 8,
- "c_team": 0,
+ "c_team": -2,
  "c_dead": 200,
- "c_live": 30,
+ "c_live": 10,
  "w_pres": 3.0,
  "w_cp": 4
 }
