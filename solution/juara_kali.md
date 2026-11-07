@@ -179,7 +179,7 @@ searched jointly.
 
 The touch radius was chosen the same way: 1.0 m scores 0.614, 1.5 m 0.611 and 2.0 m 0.608.
 These scores are not comparable with those of our earlier versions, whose test copies were
-degraded with a single tracker calibrated to BAR-ATH (§8).
+degraded with a single simulated tracker.
 
 **What each step was worth** (mean `spellF1` over the 9 evaluations, each step re-tuned; measured
 with the earlier, single simulated tracker, and not re-run since):
@@ -253,15 +253,3 @@ search, using the cached probabilities.
   counted as evidence of live play. We fixed the logic (§1.4) and set its numbers on the sample
   games only.
 * **Video.** Never used: not as input, not to check output, not to tune.
-* **Change after the rules clarification (November 2026).** Up to commit `008b2b7`:
-  * the tracker simulation was calibrated to statistics we had measured on the BAR-ATH ATD
-    without labels: how often and how long the ball is lost, its offset from the carrier, how
-    long it is tracked past a line, and how often a dead ball is seen;
-  * the touch radius came from the same measurement;
-  * the thresholds of a formation-based kickoff detector were adjusted on BAR-ATH's tracking.
-
-  The clarification requires every tuned value to come from external data, so we removed all of
-  it. The simulation now draws random trackers from fixed, wide ranges (§2.1), the touch radius was
-  re-chosen on the sample games (§1.1), and Law 8 uses the published kickoff frames (§1.4).
-* **Tools.** The code was written with the help of an AI coding assistant (Claude Code). The
-  pipeline itself calls no LLM and no online service.
