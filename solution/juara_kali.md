@@ -3,6 +3,13 @@
 **More than a Hack 2027, Phase 1** · team *Juara Kali* · submission `juara_kali.csv` ·
 code [github.com/adrianobwn/juarakali](https://github.com/adrianobwn/juarakali)
 
+> **Branch `v2`, after the competition.** The classifiers use 1000 trees instead of 600, and the
+> decoder was re-tuned on the sample games: `d_bias` 1, `w_pres` 4, out of play beyond 0.5 m for
+> 5 frames adds +4, H↔A cost `max(−2 − 3·logit P(change), 0.5)`, into D 30, out of D 130.
+> Leave-one-game-out spellF1 rises from 0.614 to 0.619 (macroF1 0.881). `submit` on this branch
+> writes a file with md5 `6fa7614181fec1cb840abbc7a1b5a534`. The rest of this document describes the
+> submitted version, which `main` keeps unchanged.
+
 We label each frame with three gradient-boosted classifiers and a three-state Viterbi decoder.
 The first classifier decides whether the ball is dead, judged only from how the players move.
 The second decides which team has the ball. The third spots the moments when the ball changes

@@ -29,6 +29,11 @@ benar (right) or SALAH (wrong). Data: [Metrica Sports sample data](https://githu
 **Results.** On held-out matches it scores spellF1 0.614 and macroF1 0.881. The organisers'
 baseline scores 0.293 and 0.674 on the same data.
 
+**v2 (this branch, after the competition).** Larger trees (1000 instead of 600) and a re-tuned
+decoder raise held-out spellF1 to 0.619, with higher scores on all three test matches. Trained and
+tuned on the same external data only. `main` keeps the submitted version unchanged. We also tried
+twice as many simulated trackers (0.612), 1500 trees (0.619) and larger leaves (0.618).
+
 **Stack.** Python, NumPy, scikit-learn, numba, kloppy.
 
 **Organised by [Metrica Sports](https://metrica-sports.com), [FC Barcelona](https://www.fcbarcelona.com)

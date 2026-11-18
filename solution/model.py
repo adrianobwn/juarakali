@@ -144,7 +144,7 @@ def load_samples():
 # -- classifiers -------------------------------------------------------------------------------
 
 def gbm():
-    return HistGradientBoostingClassifier(max_iter=600, learning_rate=0.05, max_leaf_nodes=63,
+    return HistGradientBoostingClassifier(max_iter=1000, learning_rate=0.05, max_leaf_nodes=63,
                                           l2_regularization=1.0, random_state=SEED)
 
 
