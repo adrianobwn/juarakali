@@ -28,6 +28,8 @@ benar (right) or SALAH (wrong). Data: [Metrica Sports sample data](https://githu
 
 **Results.** On held-out matches it scores spellF1 0.614 and macroF1 0.881. The organisers'
 baseline scores 0.293 and 0.674 on the same data.
+An improved version from after the competition (spellF1 0.619) is on the
+[`v2` branch](https://github.com/adrianobwn/juarakali/tree/v2).
 
 **Stack.** Python, NumPy, scikit-learn, numba, kloppy.
 
