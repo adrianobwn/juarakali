@@ -4,6 +4,33 @@
 > and exact reproduction steps are in [`solution/juara_kali.md`](solution/juara_kali.md).
 > `python solution/model.py submit` regenerates `evaluation/results/juara_kali.csv`.
 
+## Juara Kali: who has the ball, 25 times a second
+
+For every frame of a professional match, our model decides whether the home team has the ball,
+the away team has it, or the ball is dead. It works only from automatic tracking data, where the
+ball often goes missing or sits a metre off the player's feet.
+
+![Possession model on a Metrica sample match](solution/assets/possession_demo.gif)
+
+*One sequence from a public Metrica Sports sample match that the model never trained on. The top
+strip is the analysts' label, the bottom strip is our prediction, and the text marks each frame
+benar (right) or SALAH (wrong). Data: [Metrica Sports sample data](https://github.com/metrica-sports/sample-data).*
+
+**How it works**
+
+- Three gradient-boosted classifiers, one each for ball dead or alive (from player movement only),
+  which team has the ball, and the moments the ball changes hands.
+- A three-state Viterbi decoder that turns per-frame probabilities into whole possessions, with
+  the Laws of the Game on top (ball out of play, nothing before kickoff).
+- Training data from three public matches, degraded with simulated automatic trackers drawn at
+  random, so the model learns to cope with messy tracking. Nothing is tuned on the competition
+  match.
+
+**Results.** On held-out matches it scores spellF1 0.614 and macroF1 0.881. The organisers'
+baseline scores 0.293 and 0.674 on the same data.
+
+**Stack.** Python, NumPy, scikit-learn, numba, kloppy.
+
 **Organised by [Metrica Sports](https://metrica-sports.com), [FC Barcelona](https://www.fcbarcelona.com)
 and the [Mobile World Capital Barcelona](https://www.mwcbarcelona.com)**, at the Talent Arena in Barcelona.
 
